@@ -1,21 +1,27 @@
+//#define M5STACK_MPU6886
+#define M5STACK_MPU9250
 #include <M5Stack.h>
 #include <Ticker.h>
 
-#include "imu.h"
-#include "utility/MPU9250.h"
+float acc_x = 0.0F;
+float acc_y = 0.0F;
+float acc_z = 0.0F;
 
-MPU9250 IMU;
+float gyro_x = 0.0F;
+float gyro_y = 0.0F;
+float gyro_z = 0.0F;
 
 // Ticker
 Ticker timer1;
 
 // Accelerometer and gyro statistical data
 int sample_num = 100;
-float meas_interval = 0.01;
+int meas_interval = 10;  // ms
 float theta_mean;
 float theta_variance;
 float theta_dot_mean;
 float theta_dot_variance;
+float theta_acc;
 
 // Kalman filter (for angle estimation) variables
 // Update rate
@@ -100,9 +106,9 @@ void mat_inv(float *m, float *sol, int row, int column) {
     float *temp = (float *)malloc(column * 2 * row * sizeof(float));
 
     // make the augmented matrix
-    for (int i = 0; i < row; i++) {
+    for (int i = 0; i < column; i++) {
         // copy original matrix
-        for (int j = 0; j < column; j++) {
+        for (int j = 0; j < row; j++) {
             temp[i * (2 * row) + j] = m[i * row + j];
         }
 
@@ -173,16 +179,29 @@ void mat_inv(float *m, float *sol, int row, int column) {
 }
 
 float get_acc_data() {
-    float theta_deg = atan(float(IMU.az) / float(IMU.ay));
+    M5.IMU.getAccelData(&acc_x, &acc_y, &acc_z);
+
+#if 0
+    static uint32_t cnt = 0;
+    cnt++;
+    if (cnt >= 100) {
+        cnt = 0;
+        Serial.printf("acc x %5.2f y %5.2f z %5.2f\n", acc_x, acc_y, acc_z);
+    }
+#endif
+
+    float theta_deg = atan(float(acc_z) / float(acc_y));
     return theta_deg * 57.2958;
 }
 
-float get_gyro_data() { return IMU.gx * IMU.gRes; }
+float get_gyro_data() {
+    M5.IMU.getGyroData(&gyro_x, &gyro_y, &gyro_z);
+    return gyro_x * M5.IMU.gRes;
+}
 
 void acc_init() {
     float theta_array[sample_num];
     for (int i = 0; i < sample_num; i++) {
-        calcIMU(&IMU);
         theta_array[i] = get_acc_data();
         delay(meas_interval);
     }
@@ -201,12 +220,13 @@ void acc_init() {
         theta_variance += temp * temp;
     }
     theta_variance /= sample_num;
+    Serial.printf("theta_mean %f\n", theta_mean);
+    Serial.printf("theta_variance %f\n", theta_variance);
 }
 
 void gyro_init() {
     float theta_dot_array[sample_num];
     for (int i = 0; i < sample_num; i++) {
-        calcIMU(&IMU);
         theta_dot_array[i] = get_gyro_data();
         delay(meas_interval);
     }
@@ -225,16 +245,30 @@ void gyro_init() {
         theta_dot_variance += temp * temp;
     }
     theta_dot_variance /= sample_num;
+    Serial.printf("theta_dot_mean %f\n", theta_dot_mean);
+    Serial.printf("theta_dot_variance %f\n", theta_dot_variance);
 }
 
 // Kalman filter for theta and theta_dot_bias
 void update_theta() {
-    calcIMU(&IMU);
     // measurement data
-    float y = get_acc_data();
+    theta_acc = get_acc_data();
 
     // input data
     float theta_dot_gyro = get_gyro_data();
+
+#if 1
+    static uint32_t cnt = 0;
+    static uint32_t last = millis();
+    cnt++;
+    if (cnt >= 400) {
+        uint32_t diff = millis() - last;
+        Serial.printf("diff %d millis() %d\n", diff, millis());
+        last = millis();
+        cnt = 0;
+        // Serial.printf("th %f dot %f\n", theta_acc, theta_dot_gyro);
+    }
+#endif
 
     // calculate Kalman gain: G = P`C^T(W+CP`C^T)^-1
     float P_CT[2][1] = {};
@@ -252,8 +286,8 @@ void update_theta() {
     // theta_data estimation: theta = theta` + G(y - Ctheta`)
     float C_theta_theta[1][1] = {};
     mat_mul(C_theta[0], theta_data_predict[0], C_theta_theta[0], 1, 2, 2,
-            1);                               // Ctheta`
-    float delta_y = y - C_theta_theta[0][0];  // y - Ctheta`
+            1);                                       // Ctheta`
+    float delta_y = theta_acc - C_theta_theta[0][0];  // y - Ctheta`
     float delta_theta[2][1] = {};
     mat_mul_const(G[0], delta_y, delta_theta[0], 2, 1);
     mat_add(theta_data_predict[0], delta_theta[0], theta_data[0], 2, 1);
@@ -295,11 +329,12 @@ void update_theta() {
 void setup() {
     Serial.begin(115200);
     // Power ON Stabilizing...
-    delay(500);
     M5.begin();
-    Wire.begin();
 
-    initIMU(&IMU);
+    M5.Power.begin();
+
+    M5.IMU.Init();
+    delay(500);
 
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setTextColor(GREEN);
@@ -318,10 +353,31 @@ void setup() {
     P_theta_predict[1][0] = 0;
     P_theta_predict[1][1] = theta_dot_variance;
 
+    Serial.printf("theta_update_interval %f\n", theta_update_interval);
     timer1.attach(theta_update_interval, &update_theta);
 }
 
 void loop() {
-    Serial.printf("theta=%f deg\n", theta_data[0][0]);
-    delay(0.05);
+    // Serial.printf("theta=%f deg\n", theta_data[0][0]);
+    // Serial.printf("%5.2f,%5.2f\n", theta_acc, theta_data[0][0]);
+    delay(50);
+#if 0
+    M5.IMU.getGyroData(&gyro_x, &gyro_y, &gyro_z);
+    M5.IMU.getAccelData(&acc_x, &acc_y, &acc_z);
+
+    M5.Lcd.fillScreen(BLACK);
+
+    M5.Lcd.setCursor(0, 20);
+    M5.Lcd.printf("%6.2f  %6.2f  %6.2f      ", gyro_x, gyro_y, gyro_z);
+    M5.Lcd.setCursor(220, 42);
+    M5.Lcd.print(" o/s");
+    M5.Lcd.setCursor(0, 65);
+    M5.Lcd.printf(" %5.2f   %5.2f   %5.2f   ", acc_x, acc_y, acc_z);
+    M5.Lcd.setCursor(220, 87);
+    M5.Lcd.print(" G");
+    M5.Lcd.setCursor(0, 155);
+    M5.Lcd.printf("Temperature : %.2f C", temp);
+
+    delay(1);
+#endif
 }
