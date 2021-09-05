@@ -3,24 +3,13 @@
 #include <M5Stack.h>
 #include <Ticker.h>
 
-/*
 float acc_x = 0.0F;
 float acc_y = 0.0F;
 float acc_z = 0.0F;
-*/
-
-int16_t acc_x = 0;
-int16_t acc_y = 0;
-int16_t acc_z = 0;
 
 float gyro_x = 0;
 float gyro_y = 0;
 float gyro_z = 0;
-
-//加速度センサ オフセット
-int16_t accXoffset = 38;
-int16_t accYoffset = 34;
-int16_t accZoffset = 26;
 
 // Ticker
 Ticker timer1;
@@ -190,25 +179,11 @@ void mat_inv(float *m, float *sol, int row, int column) {
 }
 
 float get_acc_data() {
-    // M5.IMU.getAccelData(&acc_x, &acc_y, &acc_z);
-    M5.IMU.getAccelAdc(&acc_x, &acc_y, &acc_z);
+    M5.IMU.getAccelData(&acc_x, &acc_y, &acc_z);
 
-#if 0
-    static uint32_t cnt = 0
-    cnt++;
-    if (cnt >= 100) {
-        cnt = 0;
-        // Serial.printf("acc x %5.2f y %5.2f z %5.2f\n", acc_x, acc_y, acc_z);
-        Serial.printf("acc x %d y %d z %d\n", acc_x, acc_y, acc_z);
-    }
-#endif
-
-    // float theta_deg = atan(float(acc_z) / float(acc_y));
-    // return theta_deg * 57.2958;
-    float theta_deg =
-        atan((float)(acc_z - accZoffset) / (float)(-1 * acc_y - accYoffset)) *
-        // atan2((float)(acc_z - accZoffset), (float)(acc_y - accYoffset)) *
-        57.29578f;
+    float theta_deg = atan(acc_z / (-1 * acc_y)) * 57.29578f;
+    // atan2((float)(acc_z - accZoffset), (float)(acc_y - accYoffset))
+    // *57.29578f;
     return theta_deg;
 }
 
