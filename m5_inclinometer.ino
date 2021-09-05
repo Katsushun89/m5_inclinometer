@@ -12,7 +12,7 @@ float gyro_y = 0;
 float gyro_z = 0;
 
 // Ticker
-Ticker timer1;
+// Ticker timer1;
 
 // Accelerometer and gyro statistical data
 int sample_num = 100;
@@ -45,6 +45,13 @@ float B_theta[2][1] = {{theta_update_interval}, {0}};
 
 // C of the state equation
 float C_theta[1][2] = {{1, 0}};
+
+// hw_timer
+volatile bool is_exec_timer = false;
+volatile uint32_t last_timer_call;
+volatile SemaphoreHandle_t timer_semaphore;
+portMUX_TYPE timer_mux = portMUX_INITIALIZER_UNLOCKED;
+hw_timer_t *timer = NULL;
 
 // Matrix common functions
 // Matrix addition
@@ -241,6 +248,15 @@ void gyro_init() {
     Serial.printf("theta_dot_variance %f\n", theta_dot_variance);
 }
 
+void IRAM_ATTR onTimer() {
+    portENTER_CRITICAL_ISR(&timer_mux);
+    is_exec_timer = true;
+    last_timer_call = millis();
+    portEXIT_CRITICAL_ISR(&timer_mux);
+    // Give a semaphore that we can check in the loop
+    xSemaphoreGiveFromISR(timer_semaphore, NULL);
+}
+
 // Kalman filter for theta and theta_dot_bias
 void update_theta() {
     // measurement data
@@ -254,13 +270,14 @@ void update_theta() {
     static uint32_t last = millis();
     cnt++;
     // if (cnt >= 400) {
-    if (millis() - last >= 1000) {
+    uint32_t now = millis();
+    if (now - last >= 1000) {
         // uint32_t diff = millis() - last;
         // Serial.printf("diff %d millis() %d\n", diff, millis());
-        Serial.printf("cnt %d millis() %d\n", cnt, millis());
-        last = millis();
-        cnt = 0;
+        Serial.printf("cnt %d millis() %d\n", cnt, now);
         // Serial.printf("th %f dot %f\n", theta_acc, theta_dot_gyro);
+        last = now;
+        cnt = 0;
     }
 #endif
 
@@ -348,13 +365,35 @@ void setup() {
     P_theta_predict[1][1] = theta_dot_variance;
 
     Serial.printf("theta_update_interval %f\n", theta_update_interval);
-    timer1.attach(theta_update_interval, &update_theta);
+    // timer1.attach(theta_update_interval, &update_theta);
+
+    // timer
+    timer_semaphore = xSemaphoreCreateBinary();
+    timer = timerBegin(0, 80, true);
+    timerAttachInterrupt(timer, &onTimer, true);
+    timerAlarmWrite(timer, 2500, true);  // 2.5ms
+    timerAlarmEnable(timer);
 }
 
 void loop() {
-    Serial.printf("%5.2f,%5.2f\n", theta_acc, theta_data[0][0]);
-    delay(50);
+    static uint32_t last_print = millis();
+    if (millis() - last_print >= 50) {
+        Serial.printf("%5.2f,%5.2f\n", theta_acc, theta_data[0][0]);
+        last_print = millis();
+    }
 
+    uint32_t timer_millis;
+    if (xSemaphoreTake(timer_semaphore, 0) == pdTRUE) {
+        portENTER_CRITICAL(&timer_mux);
+        is_exec_timer = false;
+        timer_millis = last_timer_call;
+        portEXIT_CRITICAL(&timer_mux);
+
+        update_theta();
+        // Serial.print("onTimer at ");
+        // Serial.print(timer_millis);
+        // Serial.println(" ms");
+    }
 #if 0 
     M5.IMU.getGyroData(&gyro_x, &gyro_y, &gyro_z);
     M5.IMU.getAccelData(&acc_x, &acc_y, &acc_z);
