@@ -182,8 +182,7 @@ float get_acc_data() {
     M5.IMU.getAccelData(&acc_x, &acc_y, &acc_z);
 
     float theta_deg = atan(acc_z / (-1 * acc_y)) * 57.29578f;
-    // atan2((float)(acc_z - accZoffset), (float)(acc_y - accYoffset))
-    // *57.29578f;
+    // float theta_deg = atan2(acc_z, (-1 * acc_y)) * 57.29578f; //use atan2
     return theta_deg;
 }
 
