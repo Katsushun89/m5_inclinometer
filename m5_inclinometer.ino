@@ -3,13 +3,24 @@
 #include <M5Stack.h>
 #include <Ticker.h>
 
+/*
 float acc_x = 0.0F;
 float acc_y = 0.0F;
 float acc_z = 0.0F;
+*/
 
-float gyro_x = 0.0F;
-float gyro_y = 0.0F;
-float gyro_z = 0.0F;
+int16_t acc_x = 0;
+int16_t acc_y = 0;
+int16_t acc_z = 0;
+
+float gyro_x = 0;
+float gyro_y = 0;
+float gyro_z = 0;
+
+//加速度センサ オフセット
+int16_t accXoffset = 38;
+int16_t accYoffset = 34;
+int16_t accZoffset = 26;
 
 // Ticker
 Ticker timer1;
@@ -172,31 +183,38 @@ void mat_inv(float *m, float *sol, int row, int column) {
     // Copy result
     for (int i = 0; i < column; i++) {
         for (int j = 0; j < row; j++) {
-            sol[i * row + j] = temp[i * (2 * row) + (j * row)];
+            sol[i * row + j] = temp[i * (2 * row) + (j + row)];
         }
     }
     free(temp);
 }
 
 float get_acc_data() {
-    M5.IMU.getAccelData(&acc_x, &acc_y, &acc_z);
+    // M5.IMU.getAccelData(&acc_x, &acc_y, &acc_z);
+    M5.IMU.getAccelAdc(&acc_x, &acc_y, &acc_z);
 
 #if 0
-    static uint32_t cnt = 0;
+    static uint32_t cnt = 0
     cnt++;
     if (cnt >= 100) {
         cnt = 0;
-        Serial.printf("acc x %5.2f y %5.2f z %5.2f\n", acc_x, acc_y, acc_z);
+        // Serial.printf("acc x %5.2f y %5.2f z %5.2f\n", acc_x, acc_y, acc_z);
+        Serial.printf("acc x %d y %d z %d\n", acc_x, acc_y, acc_z);
     }
 #endif
 
-    float theta_deg = atan(float(acc_z) / float(acc_y));
-    return theta_deg * 57.2958;
+    // float theta_deg = atan(float(acc_z) / float(acc_y));
+    // return theta_deg * 57.2958;
+    float theta_deg =
+        atan((float)(acc_z - accZoffset) / (float)(-1 * acc_y - accYoffset)) *
+        // atan2((float)(acc_z - accZoffset), (float)(acc_y - accYoffset)) *
+        57.29578f;
+    return theta_deg;
 }
 
 float get_gyro_data() {
     M5.IMU.getGyroData(&gyro_x, &gyro_y, &gyro_z);
-    return gyro_x * M5.IMU.gRes;
+    return gyro_x;
 }
 
 void acc_init() {
@@ -257,50 +275,52 @@ void update_theta() {
     // input data
     float theta_dot_gyro = get_gyro_data();
 
-#if 1
+#if 0
     static uint32_t cnt = 0;
     static uint32_t last = millis();
     cnt++;
-    if (cnt >= 400) {
-        uint32_t diff = millis() - last;
-        Serial.printf("diff %d millis() %d\n", diff, millis());
+    // if (cnt >= 400) {
+    if (millis() - last >= 1000) {
+        // uint32_t diff = millis() - last;
+        // Serial.printf("diff %d millis() %d\n", diff, millis());
+        Serial.printf("cnt %d millis() %d\n", cnt, millis());
         last = millis();
         cnt = 0;
         // Serial.printf("th %f dot %f\n", theta_acc, theta_dot_gyro);
     }
 #endif
 
-    // calculate Kalman gain: G = P`C^T(W+CP`C^T)^-1
+    // calculate Kalman gain: G = P'C^T(W+CP'C^T)^-1
     float P_CT[2][1] = {};
     float tran_C_theta[2][1] = {};
     mat_tran(C_theta[0], tran_C_theta[0], 1, 2);                        // C^T
-    mat_mul(P_theta_predict[0], tran_C_theta[0], P_CT[0], 2, 2, 2, 1);  // P`C^T
+    mat_mul(P_theta_predict[0], tran_C_theta[0], P_CT[0], 2, 2, 2, 1);  // P'C^T
 
     float G_temp1[1][1] = {};
-    mat_mul(C_theta[0], P_CT[0], G_temp1[0], 1, 2, 2, 1);  // CP`C^T
+    mat_mul(C_theta[0], P_CT[0], G_temp1[0], 1, 2, 2, 1);  // CP'C^T
 
-    float G_temp2 = 1.0f / (G_temp1[0][0] + theta_variance);  //(W+CP`C^T)^-1
+    float G_temp2 = 1.0f / (G_temp1[0][0] + theta_variance);  //(W+CP'C^T)^-1
     float G[2][1] = {};
-    mat_mul_const(P_CT[0], G_temp2, G[0], 2, 1);  // P`C^T(W+CP`C^T)^-1
+    mat_mul_const(P_CT[0], G_temp2, G[0], 2, 1);  // P'C^T(W+CP'C^T)^-1
 
-    // theta_data estimation: theta = theta` + G(y - Ctheta`)
+    // theta_data estimation: theta = theta' + G(y - Ctheta')
     float C_theta_theta[1][1] = {};
     mat_mul(C_theta[0], theta_data_predict[0], C_theta_theta[0], 1, 2, 2,
-            1);                                       // Ctheta`
-    float delta_y = theta_acc - C_theta_theta[0][0];  // y - Ctheta`
+            1);                                       // Ctheta'
+    float delta_y = theta_acc - C_theta_theta[0][0];  // y - Ctheta'
     float delta_theta[2][1] = {};
     mat_mul_const(G[0], delta_y, delta_theta[0], 2, 1);
     mat_add(theta_data_predict[0], delta_theta[0], theta_data[0], 2, 1);
 
-    // calculate covariance matrix: P=(I-GC)P`
+    // calculate covariance matrix: P=(I-GC)P'
     float GC[2][2] = {};
     float I2[2][2] = {{1, 0}, {0, 1}};
     mat_mul(G[0], C_theta[0], GC[0], 2, 1, 1, 2);  // GC
     float I2_GC[2][2] = {};
     mat_sub(I2[0], GC[0], I2_GC[0], 2, 2);                          // I-GC
-    mat_mul(I2_GC[0], P_theta_predict[0], P_theta[0], 2, 2, 2, 2);  //((I-GC)P`
+    mat_mul(I2_GC[0], P_theta_predict[0], P_theta[0], 2, 2, 2, 2);  //((I-GC)P'
 
-    // predict the next step data: theta`
+    // predict the next step data: theta'
     float A_theta_theta[2][1] = {};
     float B_theta_dot[2][1] = {};
     mat_mul(A_theta[0], theta_data[0], A_theta_theta[0], 2, 2, 2, 1);  // Atheta
@@ -308,7 +328,7 @@ void update_theta() {
     mat_add(A_theta_theta[0], B_theta_dot[0], theta_data_predict[0], 2,
             1);  // Atheta+Bu
 
-    // predict covariance matrix: P`=APA^T + BUB^T
+    // predict covariance matrix: P'=APA^T + BUB^T
     float AP[2][2] = {};
     float APAT[2][2] = {};
     float tran_A_theta[2][2] = {};
@@ -358,10 +378,10 @@ void setup() {
 }
 
 void loop() {
-    // Serial.printf("theta=%f deg\n", theta_data[0][0]);
-    // Serial.printf("%5.2f,%5.2f\n", theta_acc, theta_data[0][0]);
+    Serial.printf("%5.2f,%5.2f\n", theta_acc, theta_data[0][0]);
     delay(50);
-#if 0
+
+#if 0 
     M5.IMU.getGyroData(&gyro_x, &gyro_y, &gyro_z);
     M5.IMU.getAccelData(&acc_x, &acc_y, &acc_z);
 
